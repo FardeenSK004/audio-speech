@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Assistant</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+    <style>
+        :root {
+            --bg: #09090b;
+            --card: #18181b;
+            --primary: #3b82f6;
+            --accent: #10b981;
+            --text: #f4f4f5;
+            --text-muted: #a1a1aa;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 500px;
+            text-align: center;
+            padding: 2rem;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 0.5rem 1rem;
+            border-radius: 9999px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            margin-bottom: 2rem;
+            background: rgba(59, 130, 246, 0.1);
+            color: var(--primary);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            transition: all 0.3s ease;
+        }
+
+        .status-ready {
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--accent);
+            border-color: rgba(16, 185, 129, 0.2);
+        }
+
+        .status-listening {
+            background: rgba(239, 68, 68, 0.1);
+            color: #ef4444;
+            border-color: rgba(239, 68, 68, 0.2);
+        }
+
+        .visualizer {
+            height: 120px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            margin-bottom: 2rem;
+        }
+
+        .bar {
+            width: 4px;
+            height: 10px;
+            background-color: var(--primary);
+            border-radius: 2px;
+            transition: height 0.1s ease;
+        }
+
+        /* Animated Chat & Logger */
+        .chat-container {
+            background: var(--card);
+            border-radius: 1rem;
+            padding: 1.5rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            min-height: 200px;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            opacity: 0;
+            transform: translateY(20px);
+            transition: all 0.5s ease;
+            pointer-events: none;
+            overflow-y: auto;
+            max-height: 400px;
+        }
+
+        .chat-container.active {
+            opacity: 1;
+            transform: translateY(0);
+            pointer-events: all;
+        }
+
+        .message-row {
+            display: flex;
+            width: 100%;
+            opacity: 0;
+            transform: translateY(10px);
+            animation: slideIn 0.3s forwards;
+        }
+
+        .message-row.user {
+            justify-content: flex-end;
+        }
+
+        .message-row.bot {
+            justify-content: flex-start;
+        }
+
+        .message-bubble {
+            padding: 0.75rem 1rem;
+            border-radius: 1rem;
+            max-width: 80%;
+            font-size: 1rem;
+            line-height: 1.5;
+            position: relative;
+        }
+
+        .user .message-bubble {
+            background: rgba(59, 130, 246, 0.2);
+            color: var(--text);
+            border-bottom-right-radius: 0.25rem;
+            animation: slideInRight 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+        }
+
+        .bot .message-bubble {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text);
+            border-bottom-left-radius: 0.25rem;
+            animation: slideInLeft 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+        }
+
+        @keyframes slideInRight {
+            from {
+                opacity: 0;
+                transform: translateX(50px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        @keyframes slideInLeft {
+            from {
+                opacity: 0;
+                transform: translateX(-50px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        /* Orb Shrink Animation */
+        .orb-wrapper.hidden {
+            opacity: 0;
+            pointer-events: none;
+            transform: translate(-50%, -50%) scale(0);
+            /* Shrink to center */
+        }
+
+        /* Debug Logger */
+        .debug-log {
+            position: fixed;
+            bottom: 10px;
+            left: 10px;
+            width: 300px;
+            height: 150px;
+            background: rgba(0, 0, 0, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 10px;
+            font-family: monospace;
+            font-size: 0.75rem;
+            color: #ccc;
+            overflow-y: auto;
+            z-index: 1000;
+            display: none;
+            /* Toggle via JS or keep on if requested */
+        }
+
+        .log-entry {
+            margin-bottom: 4px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .log-time {
+            color: #666;
+            margin-right: 5px;
+        }
+
+        .log-source {
+            color: var(--primary);
+            font-weight: bold;
+            margin-right: 5px;
+        }
+
+        /* Orb Button Styles */
+        .orb-wrapper {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2rem;
+            transition: all 0.5s ease;
+            z-index: 100;
+        }
+
+        .orb {
+            width: 200px;
+            height: 200px;
+            border-radius: 50%;
+            background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.2), transparent),
+                radial-gradient(circle at 70% 70%, rgba(59, 130, 246, 0.4), rgba(16, 185, 129, 0.4)),
+                rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 0 50px rgba(59, 130, 246, 0.2),
+                inset 0 0 30px rgba(255, 255, 255, 0.1);
+            cursor: pointer;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            animation: orb-pulse 4s infinite ease-in-out;
+            transition: all 0.3s ease;
+        }
+
+        .orb:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 70px rgba(59, 130, 246, 0.4),
+                inset 0 0 40px rgba(255, 255, 255, 0.2);
+        }
+
+        .orb::after {
+            content: 'START';
+            font-size: 1.25rem;
+            font-weight: 600;
+            letter-spacing: 0.1em;
+            color: white;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+        }
+
+        .orb-glow {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(59, 130, 246, 0.3), transparent 70%);
+            filter: blur(20px);
+            z-index: -1;
+            animation: glow-pulse 4s infinite ease-in-out;
+        }
+
+        @keyframes orb-pulse {
+
+            0%,
+            100% {
+                transform: scale(1);
+            }
+
+            50% {
+                transform: scale(1.02);
+            }
+        }
+
+        @keyframes glow-pulse {
+
+            0%,
+            100% {
+                opacity: 0.5;
+                transform: scale(1);
+            }
+
+            50% {
+                opacity: 0.8;
+                transform: scale(1.2);
+            }
+        }
+
+        .user-text {
+            color: var(--text-muted);
+            font-style: italic;
+        }
+
+        .bot-text {
+            color: var(--text);
+            font-weight: 500;
+        }
+
+        .restart-btn {
+            margin-top: 2rem;
+            background: transparent;
+            border: 1px solid var(--text-muted);
+            color: var(--text-muted);
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            font-size: 0.875rem;
+            opacity: 0;
+            transition: opacity 0.5s ease;
+            pointer-events: none;
+        }
+
+        .restart-btn.visible {
+            opacity: 1;
+            pointer-events: all;
+        }
+
+        .restart-btn:hover {
+            color: var(--text);
+            border-color: var(--text);
+        }
+    </style>
+</head>
+
+<body>
+    <div class="orb-wrapper" id="orb-container">
+        <div class="orb" onclick="initAudio()">
+            <div class="orb-glow"></div>
+        </div>
+        <p style="color: var(--text-muted); font-size: 0.875rem;">Click orb to begin conversation</p>
+    </div>
+
+    <!-- Visible Debug Log -->
+    <div id="debug-log" class="debug-log" style="display: block;">
+        <div class="log-entry" style="color: yellow;">Waiting for user action...</div>
+    </div>
+
+    <div class="container">
+        <div id="status" class="status-badge" style="display: none;">Initializing...</div>
+
+        <div class="visualizer" id="visualizer" style="display: none;">
+            <!-- Bars will be added by JS -->
+        </div>
+
+        <div class="chat-container" id="chat">
+            <!-- Messages will be appended here dynamically -->
+            <div class="message-row bot">
+                <div class="message-bubble">Ready to listen. Speak to begin...</div>
+            </div>
+        </div>
+
+        <button class="restart-btn" id="restart-btn" onclick="location.reload()">Restart Audio</button>
+    </div>
+
+    <script>
+        const socket = io();
+        const statusBadge = document.getElementById('status');
+        const visualizer = document.getElementById('visualizer');
+        const orbContainer = document.getElementById('orb-container');
+        const chatContainer = document.getElementById('chat');
+        const restartBtn = document.getElementById('restart-btn');
+        const debugLog = document.getElementById('debug-log');
+
+        function logEvent(source, message) {
+            const time = new Date().toLocaleTimeString().split(' ')[0];
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.innerHTML = `<span class="log-time">[${time}]</span><span class="log-source">${source}:</span> ${message}`;
+            debugLog.appendChild(entry);
+            debugLog.scrollTop = debugLog.scrollHeight;
+            console.log(`[${source}] ${message}`);
+        }
+
+        // Setup Visualizer Bars
+        const BARS_COUNT = 32;
+        const bars = [];
+        for (let i = 0; i < BARS_COUNT; i++) {
+            const bar = document.createElement('div');
+            bar.className = 'bar';
+            visualizer.appendChild(bar);
+            bars.push(bar);
+        }
+
+        let audioContext;
+        let processor;
+        let input;
+        let globalStream;
+
+        async function initAudio() {
+            logEvent('System', 'Initializing Audio...');
+
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                const errorMsg = "Browser API 'navigator.mediaDevices' is missing. Use 'localhost' or HTTPS.";
+                logEvent('Error', errorMsg);
+                addMessage('bot', "Error: Secure Context Required (HTTPS or localhost).");
+                statusBadge.innerText = 'Security Error';
+                statusBadge.style.color = '#ef4444';
+                return;
+            }
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    }
+                });
+                globalStream = stream;
+                logEvent('Mic', 'Access Granted');
+
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                input = audioContext.createMediaStreamSource(stream);
+
+                // Hide Orb, Show Chat
+                orbContainer.classList.add('hidden'); // Uses css: transform scale(0)
+                setTimeout(() => {
+                    orbContainer.style.display = 'none';
+                    statusBadge.style.display = 'inline-block';
+                    visualizer.style.display = 'flex';
+                    chatContainer.classList.add('active');
+                    restartBtn.classList.add('visible');
+                }, 500);
+
+                await audioContext.resume();
+                logEvent('AudioCtx', 'Resumed state: ' + audioContext.state);
+
+                // ScriptProcessor for easy downsampling and chunking
+                // 512 buffer size at 16k is ~32ms, which is perfect for VAD
+                processor = audioContext.createScriptProcessor(512, 1, 1);
+
+                let chunksSent = 0;
+
+                processor.onaudioprocess = (e) => {
+                    const channelData = e.inputBuffer.getChannelData(0);
+
+                    // Convert float32 to int16 with GAIN BOOST
+                    const GAIN = 25.0; // Increased to 25x for better VAD detection
+                    const int16Data = new Int16Array(channelData.length);
+                    let hasAudio = false;
+
+                    for (let i = 0; i < channelData.length; i++) {
+                        let val = channelData[i] * GAIN;
+                        val = Math.max(-1, Math.min(1, val)); // Clamp to [-1, 1]
+
+                        int16Data[i] = val < 0 ? val * 32768 : val * 32767;
+                        if (Math.abs(val) > 0.01) hasAudio = true;
+                    }
+
+                    if (socket.connected) {
+                        socket.emit('audio_chunk', int16Data.buffer);
+                        chunksSent++;
+                        if (chunksSent % 100 === 0) logEvent('Audio', `Sent ${chunksSent} chunks`);
+                    }
+
+                    // Update Visualizer
+                    updateVisualizer(channelData);
+                };
+
+                input.connect(processor);
+                processor.connect(audioContext.destination);
+
+                statusBadge.innerText = 'Ready';
+                statusBadge.classList.add('status-ready');
+                logEvent('System', 'Audio Pipeline Ready');
+            } catch (err) {
+                console.error('Audio initialization failed:', err);
+                logEvent('Error', err.name + ': ' + err.message);
+                statusBadge.innerText = `Error: ${err.name}`;
+                statusBadge.style.color = '#ef4444';
+
+                if (err.name === 'NotAllowedError') {
+                    addMessage('bot', "Microphone permission denied. Please allow access in your browser settings.");
+                } else if (err.name === 'NotFoundError') {
+                    addMessage('bot', "No microphone found. Please connect a microphone and try again.");
+                } else if (err.name === 'SecurityError' || (location.protocol !== 'https:' && location.hostname !== 'localhost')) {
+                    addMessage('bot', "Microphone access blocked. Use 'localhost' or HTTPS to enable security features.");
+                } else {
+                    addMessage('bot', "Error: " + err.message);
+                }
+            }
+        }
+
+        function updateVisualizer(data) {
+            const step = Math.floor(data.length / BARS_COUNT);
+            for (let i = 0; i < BARS_COUNT; i++) {
+                let sum = 0;
+                for (let j = 0; j < step; j++) {
+                    sum += Math.abs(data[i * step + j]);
+                }
+                const avg = sum / step;
+                const height = Math.max(4, avg * 150);
+                bars[i].style.height = `${height}px`;
+                bars[i].style.opacity = 0.5 + (avg * 2);
+            }
+        }
+
+        function addMessage(role, text) {
+            const row = document.createElement('div');
+            row.className = `message-row ${role}`;
+
+            const bubble = document.createElement('div');
+            bubble.className = 'message-bubble';
+            bubble.innerText = text;
+
+            row.appendChild(bubble);
+            chatContainer.appendChild(row);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        // Socket Events
+        socket.on('connect', () => {
+            logEvent('Socket', 'Connected: ' + socket.id);
+            statusBadge.innerText = 'Connected';
+            statusBadge.style.color = 'var(--accent)';
+        });
+
+        socket.on('disconnect', () => {
+            logEvent('Socket', 'Disconnected');
+            statusBadge.innerText = 'Disconnected';
+            statusBadge.style.color = '#ef4444';
+        });
+
+        socket.on('connect_error', (error) => {
+            logEvent('Socket', 'Connect Error: ' + error);
+            statusBadge.innerText = 'Connection Error';
+            statusBadge.style.color = '#ef4444';
+        });
+
+        socket.on('status', (data) => {
+            logEvent('Server', 'State: ' + data.state);
+            statusBadge.innerText = data.state.toUpperCase();
+            statusBadge.className = 'status-badge status-' + data.state;
+        });
+
+        socket.on('transcription', (data) => {
+            logEvent('Trans.', data.text);
+            addMessage('user', data.text);
+        });
+
+        socket.on('llm_response', (data) => {
+            logEvent('LLM', data.text);
+            addMessage('bot', data.text);
+        });
+
+        socket.on('bot_audio', async (data) => {
+            logEvent('Audio', 'Received TTS Audio');
+            // Data is MP3 buffer from OpenAI TTS
+            const blob = new Blob([data], { type: 'audio/mpeg' });
+            const url = URL.createObjectURL(blob);
+            const audio = new Audio(url);
+
+            // Optional: Handle interruption by checking status or adding a cancel flag
+            audio.play().catch(e => logEvent('Error', "Audio playback failed: " + e));
+        });
+
+    </script>
+</body>
+
+</html>

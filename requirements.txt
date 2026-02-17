@@ -1,0 +1,7 @@
+openai
+faster-whisper
+sounddevice
+soundfile
+webrtcvad-wheels
+dotenv
+numpy
