@@ -39,7 +39,7 @@ SAMPLE_RATE = 16000
 FRAME_DURATION = 30  # ms
 FRAME_SIZE = int(SAMPLE_RATE * FRAME_DURATION / 1000)
 VAD_MODE = 0 # Most sensitive mode
-SYSTEM_PROMPT = "You are a helpful, extremely concise live assistant. Respond naturally but keep answers under 20 words where possible."
+SYSTEM_PROMPT = "Be as pookie as possible and respond to me in a cute way"
 
 # Session state storage
 sessions = {}
@@ -132,8 +132,8 @@ def handle_audio_chunk(data):
                 state.silent_frames += 1
                 state.audio_buffer.append(frame)
                 
-                # End detection: 800ms of silence
-                if state.silent_frames > (800 / FRAME_DURATION):
+                # End detection: 400ms of silence (reduced from 800ms)
+                if state.silent_frames > (400 / FRAME_DURATION):
                     state.is_recording = False
                     emit('status', {'state': 'processing'})
                     
@@ -176,6 +176,8 @@ def process_speech(sid, audio_bytes):
 
         full_reply = ""
         sentence_buffer = ""
+        chunk_index = 0
+        sentences_to_speak = []
         
         for chunk in stream:
             token = chunk.choices[0].delta.content
@@ -186,15 +188,17 @@ def process_speech(sid, audio_bytes):
                 socketio.emit('llm_token', {'token': token}, room=sid)
 
                 # Check for sentence boundaries
-                if any(punct in sentence_buffer for punct in ['.', '!', '?', '\n']) and len(sentence_buffer) > 20:
+                if any(punct in sentence_buffer for punct in ['.', '!', '?', '\n']) and len(sentence_buffer) > 5:
                     sentence = sentence_buffer.strip()
                     sentence_buffer = ""
-                    # Trigger TTS in background for this sentence
-                    socketio.start_background_task(generate_and_emit_tts, sid, sentence)
+                    sentences_to_speak.append(sentence)
+                    # Generate and emit TTS inline (serialized, not background)
+                    generate_and_emit_tts(sid, sentence, chunk_index)
+                    chunk_index += 1
 
         # Final sentence if any remains
         if sentence_buffer.strip():
-            socketio.start_background_task(generate_and_emit_tts, sid, sentence_buffer.strip())
+            generate_and_emit_tts(sid, sentence_buffer.strip(), chunk_index)
 
         state.conversation.append({"role": "assistant", "content": full_reply})
         print(f"[{sid}] Bot (Full): {full_reply}")
@@ -209,13 +213,18 @@ def process_speech(sid, audio_bytes):
     state.processing = False
     socketio.emit('status', {'state': 'ready'}, room=sid)
 
-def generate_and_emit_tts(sid, text):
+def generate_and_emit_tts(sid, text, index):
     try:
+        print(f"[{sid}] Generating TTS for chunk {index}: {text[:30]}...")
         audio_response_bytes = tts_engine.get_audio_bytes(text)
         if audio_response_bytes:
-            socketio.emit('bot_audio', audio_response_bytes, room=sid)
+            print(f"[{sid}] Emitting TTS chunk {index} ({len(audio_response_bytes)} bytes)")
+            # Emit as object with index for sequencing
+            socketio.emit('bot_audio', {'audio': audio_response_bytes, 'index': index}, room=sid)
+        else:
+            print(f"[{sid}] TTS generation failed for chunk {index}")
     except Exception as e:
-        print(f"TTS Streaming error: {e}")
+        print(f"TTS Streaming error (chunk {index}): {e}")
 
 if __name__ == '__main__':
     print("--- Server Starting on http://0.0.0.0:6123 ---")

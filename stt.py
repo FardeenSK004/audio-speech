@@ -10,7 +10,7 @@ class STT:
         Transcribe audio data (numpy array).
         """
         # faster-whisper can take a numpy array directly
-        segments, info = self.model.transcribe(audio_data, beam_size=5)
+        segments, info = self.model.transcribe(audio_data, beam_size=1)
         text = "".join([segment.text for segment in segments]).strip()
         return text, info
 

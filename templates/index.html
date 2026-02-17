@@ -562,6 +562,9 @@
 
             if (data.state === 'listening') {
                 currentMessageBubble = null; // Prepare for new message
+                // Reset audio sequencing for new turn
+                nextAudioIndex = 0;
+                sequencedAudioBuffer = {};
             }
         });
 
@@ -595,37 +598,48 @@
             }
         });
 
-        const audioQueue = [];
+        let sequencedAudioBuffer = {};
+        let nextAudioIndex = 0;
         let isPlaying = false;
 
         async function playNextInQueue() {
-            if (audioQueue.length === 0) {
+            // Check if the next expected index is in our buffer
+            if (!sequencedAudioBuffer[nextAudioIndex]) {
                 isPlaying = false;
                 return;
             }
 
             isPlaying = true;
-            const data = audioQueue.shift();
-            const blob = new Blob([data], { type: 'audio/mpeg' });
+            const audioData = sequencedAudioBuffer[nextAudioIndex];
+            delete sequencedAudioBuffer[nextAudioIndex];
+
+            const currentIdx = nextAudioIndex;
+            nextAudioIndex++;
+
+            const blob = new Blob([audioData], { type: 'audio/mpeg' });
             const url = URL.createObjectURL(blob);
             const audio = new Audio(url);
 
             audio.onended = () => {
                 URL.revokeObjectURL(url);
+                logEvent('Audio', `Finished playing chunk ${currentIdx}`);
                 playNextInQueue();
             };
 
             try {
                 await audio.play();
+                logEvent('Audio', `Playing chunk ${currentIdx}`);
             } catch (e) {
-                logEvent('Error', "Audio playback failed: " + e);
+                logEvent('Error', `Playback failed for chunk ${currentIdx}: ` + e);
                 playNextInQueue();
             }
         }
 
         socket.on('bot_audio', async (data) => {
-            logEvent('Audio', 'Received TTS Audio Chunk');
-            audioQueue.push(data);
+            // data is {audio: bytes, index: number}
+            logEvent('Audio', `Received chunk ${data.index}`);
+            sequencedAudioBuffer[data.index] = data.audio;
+
             if (!isPlaying) {
                 playNextInQueue();
             }
@@ -635,4 +649,3 @@
 </body>
 
 </html>
-```
