@@ -559,6 +559,25 @@
             logEvent('Server', 'State: ' + data.state);
             statusBadge.innerText = data.state.toUpperCase();
             statusBadge.className = 'status-badge status-' + data.state;
+
+            if (data.state === 'listening') {
+                currentMessageBubble = null; // Prepare for new message
+            }
+        });
+
+        let currentMessageBubble = null;
+
+        socket.on('llm_token', (data) => {
+            if (!currentMessageBubble) {
+                const row = document.createElement('div');
+                row.className = 'message-row bot';
+                currentMessageBubble = document.createElement('div');
+                currentMessageBubble.className = 'message-bubble';
+                row.appendChild(currentMessageBubble);
+                chatContainer.appendChild(row);
+            }
+            currentMessageBubble.innerText += data.token;
+            chatContainer.scrollTop = chatContainer.scrollHeight;
         });
 
         socket.on('transcription', (data) => {
@@ -567,22 +586,53 @@
         });
 
         socket.on('llm_response', (data) => {
-            logEvent('LLM', data.text);
-            addMessage('bot', data.text);
+            logEvent('LLM', '(Complete Response Received)');
+            // No longer adding a new message here as tokens already did it
+            if (currentMessageBubble) {
+                currentMessageBubble.innerText = data.text; // Ensure sync if tokens missed
+            } else {
+                addMessage('bot', data.text);
+            }
         });
 
-        socket.on('bot_audio', async (data) => {
-            logEvent('Audio', 'Received TTS Audio');
-            // Data is MP3 buffer from OpenAI TTS
+        const audioQueue = [];
+        let isPlaying = false;
+
+        async function playNextInQueue() {
+            if (audioQueue.length === 0) {
+                isPlaying = false;
+                return;
+            }
+
+            isPlaying = true;
+            const data = audioQueue.shift();
             const blob = new Blob([data], { type: 'audio/mpeg' });
             const url = URL.createObjectURL(blob);
             const audio = new Audio(url);
 
-            // Optional: Handle interruption by checking status or adding a cancel flag
-            audio.play().catch(e => logEvent('Error', "Audio playback failed: " + e));
+            audio.onended = () => {
+                URL.revokeObjectURL(url);
+                playNextInQueue();
+            };
+
+            try {
+                await audio.play();
+            } catch (e) {
+                logEvent('Error', "Audio playback failed: " + e);
+                playNextInQueue();
+            }
+        }
+
+        socket.on('bot_audio', async (data) => {
+            logEvent('Audio', 'Received TTS Audio Chunk');
+            audioQueue.push(data);
+            if (!isPlaying) {
+                playNextInQueue();
+            }
         });
 
     </script>
 </body>
 
 </html>
+```

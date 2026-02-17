@@ -165,27 +165,39 @@ def process_speech(sid, audio_bytes):
         socketio.emit('transcription', {'text': text}, room=sid)
         state.conversation.append({"role": "user", "content": text})
 
-        # Step 2: LLM
-        response = client.chat.completions.create(
+        # Step 2 & 3: Streaming LLM and TTS
+        print(f"[{sid}] Starting LLM stream...")
+        stream = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=state.conversation,
-            temperature=0.7
+            temperature=0.7,
+            stream=True
         )
-        reply = response.choices[0].message.content
-        print(f"[{sid}] Bot: {reply}")
-        state.conversation.append({"role": "assistant", "content": reply})
-        try:
-            socketio.emit('llm_response', {'text': reply}, room=sid)
-        except Exception as e:
-            print(f"Error emitting LLM response: {e}")
 
-        # Step 3: TTS
-        audio_response_bytes = tts_engine.get_audio_bytes(reply)
-        if audio_response_bytes:
-            try:
-                socketio.emit('bot_audio', audio_response_bytes, room=sid)
-            except Exception as e:
-                print(f"Error emitting audio response: {e}")
+        full_reply = ""
+        sentence_buffer = ""
+        
+        for chunk in stream:
+            token = chunk.choices[0].delta.content
+            if token:
+                full_reply += token
+                sentence_buffer += token
+                # Emit token immediately for UI
+                socketio.emit('llm_token', {'token': token}, room=sid)
+
+                # Check for sentence boundaries
+                if any(punct in sentence_buffer for punct in ['.', '!', '?', '\n']) and len(sentence_buffer) > 20:
+                    sentence = sentence_buffer.strip()
+                    sentence_buffer = ""
+                    # Trigger TTS in background for this sentence
+                    socketio.start_background_task(generate_and_emit_tts, sid, sentence)
+
+        # Final sentence if any remains
+        if sentence_buffer.strip():
+            socketio.start_background_task(generate_and_emit_tts, sid, sentence_buffer.strip())
+
+        state.conversation.append({"role": "assistant", "content": full_reply})
+        print(f"[{sid}] Bot (Full): {full_reply}")
 
     except Exception as e:
         print(f"Processing error: {e}")
@@ -196,6 +208,14 @@ def process_speech(sid, audio_bytes):
     
     state.processing = False
     socketio.emit('status', {'state': 'ready'}, room=sid)
+
+def generate_and_emit_tts(sid, text):
+    try:
+        audio_response_bytes = tts_engine.get_audio_bytes(text)
+        if audio_response_bytes:
+            socketio.emit('bot_audio', audio_response_bytes, room=sid)
+    except Exception as e:
+        print(f"TTS Streaming error: {e}")
 
 if __name__ == '__main__':
     print("--- Server Starting on http://0.0.0.0:6123 ---")
