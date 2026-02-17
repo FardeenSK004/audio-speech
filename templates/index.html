@@ -166,6 +166,18 @@
             }
         }
 
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
         /* Orb Shrink Animation */
         .orb-wrapper.hidden {
             opacity: 0;
@@ -445,16 +457,22 @@
                     const channelData = e.inputBuffer.getChannelData(0);
 
                     // Convert float32 to int16 with GAIN BOOST
-                    const GAIN = 25.0; // Increased to 25x for better VAD detection
+                    const GAIN = 5.0; // Reduced from 25.0 to prevent noise amplification
                     const int16Data = new Int16Array(channelData.length);
                     let hasAudio = false;
+                    let clipped = false;
 
                     for (let i = 0; i < channelData.length; i++) {
                         let val = channelData[i] * GAIN;
+                        if (val > 1.0 || val < -1.0) clipped = true;
                         val = Math.max(-1, Math.min(1, val)); // Clamp to [-1, 1]
 
                         int16Data[i] = val < 0 ? val * 32768 : val * 32767;
                         if (Math.abs(val) > 0.01) hasAudio = true;
+                    }
+
+                    if (clipped && Math.random() < 0.01) { // Log occasionally if clipping
+                        logEvent('Audio', 'Warning: Audio clipping detected!');
                     }
 
                     if (socket.connected) {

@@ -89,8 +89,13 @@ def handle_audio_chunk(data):
     audio_np = np.frombuffer(data, dtype=np.int16).astype(np.float64)
     rms = np.sqrt(np.mean(audio_np**2))
     
+    if not hasattr(state, 'rms_buffer'): state.rms_buffer = []
+    state.rms_buffer.append(rms)
+
     if state.chunk_count % 50 == 0:
-        print(f"[{sid}] Received 50 audio chunks (Total: {state.chunk_count}) | RMS Energy: {rms:.2f}")
+        avg_rms = sum(state.rms_buffer) / len(state.rms_buffer) if state.rms_buffer else 0
+        state.rms_buffer = [] # Reset buffer
+        print(f"[{sid}] Received 50 audio chunks (Total: {state.chunk_count}) | Avg RMS: {avg_rms:.2f}")
 
     if state.processing:
         return
@@ -169,16 +174,25 @@ def process_speech(sid, audio_bytes):
         reply = response.choices[0].message.content
         print(f"[{sid}] Bot: {reply}")
         state.conversation.append({"role": "assistant", "content": reply})
-        socketio.emit('llm_response', {'text': reply}, room=sid)
+        try:
+            socketio.emit('llm_response', {'text': reply}, room=sid)
+        except Exception as e:
+            print(f"Error emitting LLM response: {e}")
 
         # Step 3: TTS
         audio_response_bytes = tts_engine.get_audio_bytes(reply)
         if audio_response_bytes:
-            socketio.emit('bot_audio', audio_response_bytes, room=sid)
+            try:
+                socketio.emit('bot_audio', audio_response_bytes, room=sid)
+            except Exception as e:
+                print(f"Error emitting audio response: {e}")
 
     except Exception as e:
         print(f"Processing error: {e}")
-        socketio.emit('error', {'message': str(e)}, room=sid)
+        try:
+            socketio.emit('error', {'message': str(e)}, room=sid)
+        except:
+            pass
     
     state.processing = False
     socketio.emit('status', {'state': 'ready'}, room=sid)
