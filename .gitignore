@@ -12,3 +12,7 @@ wheels/
 # Environment variables
 .env
 
+session_dashboard.png
+session_report.md
+session_summary.json
+transcript.txt

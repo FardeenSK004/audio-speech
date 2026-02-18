@@ -39,7 +39,7 @@ SAMPLE_RATE = 16000
 FRAME_DURATION = 30  # ms
 FRAME_SIZE = int(SAMPLE_RATE * FRAME_DURATION / 1000)
 VAD_MODE = 0 # Most sensitive mode
-SYSTEM_PROMPT = "Be as pookie as possible and respond to me in a cute way"
+SYSTEM_PROMPT = "Be as pookie as possible and respond to me in a cute way without any emojis"
 
 # Session state storage
 sessions = {}
