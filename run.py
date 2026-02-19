@@ -16,7 +16,11 @@ import threading
 
 load_dotenv()
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if os.getenv("OPENAI_API_KEY"):
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+else:
+    raise ValueError("OPENAI_API_KEY environment variable is not set")
+
 MODEL = "gpt-4o-mini-realtime-preview"
 
 # OpenAI Realtime uses 24kHz for audio
@@ -752,9 +756,11 @@ async def receive_events(ws):
             
             elif message["type"] == "error":
                 print(f"\n[Error]: {message.get('error', {}).get('message')}")
-
         except websockets.ConnectionClosed:
             print("Websocket connection closed")
+            state.is_running = False
+            break
+            state.is_running = False
             break
 
 def playback_callback(outdata, frames, time, status):
@@ -839,8 +845,8 @@ async def dashboard_task():
         heatmap.set_data(intensity_data)
         
         # Robust metric display
-        usage = state.usage
-        in_details = usage.get("input_token_details", {})
+        in_details = usage.get("input_details", {})
+        out_details = usage.get("output_details", {})
         out_details = usage.get("output_token_details", {})
         
         usage_info = (
