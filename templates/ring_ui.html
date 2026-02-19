@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ring UI - Live Assistant</title>
+    <style>
+        :root {
+            --bg: #09090b;
+            --card: #18181b;
+            --primary: #3b82f6;
+            --accent: #10b981;
+            --text: #f4f4f5;
+            --text-muted: #a1a1aa;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Orb Button Styles */
+        .orb-wrapper {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2rem;
+            transition: all 0.5s ease;
+            z-index: 100;
+        }
+
+        .orb {
+            width: 200px;
+            height: 200px;
+            border-radius: 50%;
+            background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.2), transparent),
+                radial-gradient(circle at 70% 70%, rgba(59, 130, 246, 0.4), rgba(16, 185, 129, 0.4)),
+                rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 0 50px rgba(59, 130, 246, 0.2),
+                inset 0 0 30px rgba(255, 255, 255, 0.1);
+            cursor: pointer;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            animation: orb-pulse 4s infinite ease-in-out;
+            transition: all 0.3s ease;
+        }
+
+        .orb:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 70px rgba(59, 130, 246, 0.4),
+                inset 0 0 40px rgba(255, 255, 255, 0.2);
+        }
+
+        .orb::after {
+            content: 'START';
+            font-size: 1.25rem;
+            font-weight: 600;
+            letter-spacing: 0.1em;
+            color: white;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+        }
+
+        .orb-glow {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(59, 130, 246, 0.3), transparent 70%);
+            filter: blur(20px);
+            z-index: -1;
+            animation: glow-pulse 4s infinite ease-in-out;
+        }
+
+        @keyframes orb-pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.02); }
+        }
+
+        @keyframes glow-pulse {
+            0%, 100% { opacity: 0.5; transform: scale(1); }
+            50% { opacity: 0.8; transform: scale(1.2); }
+        }
+
+        .back-btn {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: var(--text-muted);
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            text-decoration: none;
+            font-size: 0.875rem;
+            transition: all 0.3s ease;
+            z-index: 1000;
+        }
+
+        .back-btn:hover {
+            color: var(--text);
+            border-color: var(--text);
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .status-badge {
+            margin-top: 2rem;
+            padding: 0.5rem 1rem;
+            border-radius: 9999px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--accent);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            display: none;
+        }
+
+        /* Hide Desivocal Widget */
+        #dv-agent-container, .dv-agent-widget, iframe[src*="desivocal"] {
+            display: none !important;
+        }
+    </style>
+    <script>
+      function loadAgentsCdn(e,t){let n=document.createElement("link");n.rel="stylesheet",n.type="text/css",n.href=`https://cdn.jsdelivr.net/npm/@desivocal/agents-cdn@${e}/dist/style.css`;var a=document.createElement("script");a.type="text/javascript",a.readyState?a.onreadystatechange=function(){"loaded"!==a.readyState&&"complete"!==a.readyState||(a.onreadystatechange=null,t())}:a.onload=function(){t()},a.src=`https://cdn.jsdelivr.net/npm/@desivocal/agents-cdn@${e}/dist/dv-agent.es.js`,document.getElementsByTagName("head")[0].appendChild(n),document.getElementsByTagName("head")[0].appendChild(a)}
+    </script>
+</head>
+
+<body>
+    <a href="/" class="back-btn">← Back to Main</a>
+
+    <div class="orb-wrapper" id="orb-container">
+        <div class="orb" id="start-btn">
+            <div class="orb-glow"></div>
+        </div>
+        <p style="color: var(--text-muted); font-size: 0.875rem;">Click orb to ring the voice agent</p>
+        <div id="status" class="status-badge" style="display: none;">Calling Agent...</div>
+    </div>
+
+    <script>
+        const startBtn = document.getElementById('start-btn');
+        const statusBadge = document.getElementById('status');
+        let agentInitialized = false;
+
+        startBtn.addEventListener('click', () => {
+            if (agentInitialized) {
+                console.log("Agent already initialized.");
+                return;
+            }
+            
+            console.log("Initializing Desivocal Agent via Orb...");
+            statusBadge.style.display = 'block';
+            statusBadge.innerText = 'Connecting...';
+            
+            loadAgentsCdn("1.0.20-alpha.54", function () {
+                try {
+                    loadAgent({
+                        agentId: "68aee5f2-762e-498d-8fa8-6c49bc096b15",
+                        xApiKey: "70933c18-b270-41f7-905a-fa6539ac4bc8",
+                        variables: {"callee_name":"CALLEE_NAME"},
+                        // Configuration to help hide/auto-start
+                        config: {
+                            showWidget: false,
+                            autoStart: true
+                        }
+                    });
+                    agentInitialized = true;
+                    statusBadge.innerText = 'Agent Active - Speak Now';
+                    console.log("Desivocal Agent loaded and started.");
+                } catch (error) {
+                    console.error("Failed to load agent:", error);
+                    statusBadge.innerText = 'Connection Failed';
+                    statusBadge.style.color = '#ef4444';
+                    agentInitialized = false;
+                }
+            });
+        });
+    </script>
+</body>
+
+</html>

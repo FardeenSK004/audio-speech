@@ -1,0 +1,12 @@
+<script>
+  function loadAgentsCdn(e,t){let n=document.createElement("link");n.rel="stylesheet",n.type="text/css",n.href=`https://cdn.jsdelivr.net/npm/@desivocal/agents-cdn@${e}/dist/style.css`;var a=document.createElement("script");a.type="text/javascript",a.readyState?a.onreadystatechange=function(){"loaded"!==a.readyState&&"complete"!==a.readyState||(a.onreadystatechange=null,t())}:a.onload=function(){t()},a.src=`https://cdn.jsdelivr.net/npm/@desivocal/agents-cdn@${e}/dist/dv-agent.es.js`,document.getElementsByTagName("head")[0].appendChild(n),document.getElementsByTagName("head")[0].appendChild(a)}
+</script>
+<script>
+  loadAgentsCdn("1.0.20-alpha.54", function () {
+    loadAgent({
+      agentId: "68aee5f2-762e-498d-8fa8-6c49bc096b15",
+      xApiKey: "70933c18-b270-41f7-905a-fa6539ac4bc8",
+      variables: {"callee_name":"CALLEE_NAME"},
+    });
+  });
+</script>

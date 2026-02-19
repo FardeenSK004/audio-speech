@@ -23,7 +23,7 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 
 # Initialize modules
 print("Initializing STT model (faster-whisper)...")
-stt_model = STT(model_size="base")
+stt_model = STT(model_size="tiny")
 print("STT model ready.")
 
 print("Initializing TTS engine...")
@@ -59,6 +59,10 @@ class SessionState:
 @app.route('/')
 def index():
     return render_template('index.html')
+
+@app.route('/ring-ui')
+def ring_ui():
+    return render_template('ring_ui.html')
 
 @socketio.on('connect')
 def handle_connect():
@@ -132,8 +136,8 @@ def handle_audio_chunk(data):
                 state.silent_frames += 1
                 state.audio_buffer.append(frame)
                 
-                # End detection: 400ms of silence (reduced from 800ms)
-                if state.silent_frames > (400 / FRAME_DURATION):
+                # End detection: 300ms of silence (reduced for lower latency)
+                if state.silent_frames > (300 / FRAME_DURATION):
                     state.is_recording = False
                     emit('status', {'state': 'processing'})
                     
@@ -144,6 +148,27 @@ def handle_audio_chunk(data):
                     
                     socketio.start_background_task(process_speech, sid, audio_to_process)
 
+def tts_worker(sid, tts_queue):
+    """Background worker that processes TTS requests from the queue."""
+    while True:
+        item = tts_queue.get()
+        if item is None:  # Sentinel to stop
+            break
+        text, index = item
+        try:
+            t_start = time.time()
+            print(f"[{sid}] TTS chunk {index}: {text[:40]}...")
+            audio_response_bytes = tts_engine.get_audio_bytes(text)
+            if audio_response_bytes:
+                elapsed = time.time() - t_start
+                print(f"[{sid}] TTS chunk {index} ready ({len(audio_response_bytes)} bytes, {elapsed:.2f}s)")
+                socketio.emit('bot_audio', {'audio': audio_response_bytes, 'index': index}, room=sid)
+            else:
+                print(f"[{sid}] TTS generation failed for chunk {index}, sending skip")
+                socketio.emit('bot_audio_skip', {'index': index}, room=sid)
+        except Exception as e:
+            print(f"TTS worker error (chunk {index}): {e}")
+
 def process_speech(sid, audio_bytes):
     if sid not in sessions:
         return
@@ -153,20 +178,23 @@ def process_speech(sid, audio_bytes):
     
     try:
         # Step 1: Transcribe
+        t0 = time.time()
         audio_np = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
         text, info = stt_model.transcribe(audio_np)
+        stt_time = time.time() - t0
         
         if not text.strip() or len(text.strip()) < 2:
             state.processing = False
             socketio.emit('status', {'state': 'ready'}, room=sid)
             return
 
-        print(f"[{sid}] You: {text}")
+        print(f"[{sid}] You: {text} (STT: {stt_time:.2f}s)")
         socketio.emit('transcription', {'text': text}, room=sid)
         state.conversation.append({"role": "user", "content": text})
 
-        # Step 2 & 3: Streaming LLM and TTS
+        # Step 2 & 3: Streaming LLM with PARALLEL TTS
         print(f"[{sid}] Starting LLM stream...")
+        t1 = time.time()
         stream = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=state.conversation,
@@ -174,34 +202,51 @@ def process_speech(sid, audio_bytes):
             stream=True
         )
 
+        # Start TTS worker thread — it processes sentences as they arrive
+        tts_queue = queue.Queue()
+        tts_thread = threading.Thread(target=tts_worker, args=(sid, tts_queue), daemon=True)
+        tts_thread.start()
+
         full_reply = ""
         sentence_buffer = ""
         chunk_index = 0
-        sentences_to_speak = []
+        first_token_time = None
         
         for chunk in stream:
             token = chunk.choices[0].delta.content
             if token:
+                if first_token_time is None:
+                    first_token_time = time.time() - t1
+                    print(f"[{sid}] First LLM token in {first_token_time:.2f}s")
+                
                 full_reply += token
                 sentence_buffer += token
                 # Emit token immediately for UI
                 socketio.emit('llm_token', {'token': token}, room=sid)
 
-                # Check for sentence boundaries
-                if any(punct in sentence_buffer for punct in ['.', '!', '?', '\n']) and len(sentence_buffer) > 5:
+                # Check for sentence boundaries (only proper sentence endings)
+                if any(p in sentence_buffer for p in ['.', '!', '?', '\n']) and len(sentence_buffer) > 15:
                     sentence = sentence_buffer.strip()
                     sentence_buffer = ""
-                    sentences_to_speak.append(sentence)
-                    # Generate and emit TTS inline (serialized, not background)
-                    generate_and_emit_tts(sid, sentence, chunk_index)
+                    # Non-blocking: push to TTS worker queue
+                    tts_queue.put((sentence, chunk_index))
                     chunk_index += 1
 
         # Final sentence if any remains
         if sentence_buffer.strip():
-            generate_and_emit_tts(sid, sentence_buffer.strip(), chunk_index)
+            tts_queue.put((sentence_buffer.strip(), chunk_index))
 
+        # Signal TTS worker to finish and wait
+        tts_queue.put(None)
+        tts_thread.join()
+
+        # Tell frontend how many chunks to expect
+        socketio.emit('tts_complete', {'total_chunks': chunk_index}, room=sid)
+
+        total_time = time.time() - t0
         state.conversation.append({"role": "assistant", "content": full_reply})
         print(f"[{sid}] Bot (Full): {full_reply}")
+        print(f"[{sid}] Total pipeline: {total_time:.2f}s")
 
     except Exception as e:
         print(f"Processing error: {e}")
@@ -213,18 +258,40 @@ def process_speech(sid, audio_bytes):
     state.processing = False
     socketio.emit('status', {'state': 'ready'}, room=sid)
 
-def generate_and_emit_tts(sid, text, index):
-    try:
-        print(f"[{sid}] Generating TTS for chunk {index}: {text[:30]}...")
-        audio_response_bytes = tts_engine.get_audio_bytes(text)
-        if audio_response_bytes:
-            print(f"[{sid}] Emitting TTS chunk {index} ({len(audio_response_bytes)} bytes)")
-            # Emit as object with index for sequencing
-            socketio.emit('bot_audio', {'audio': audio_response_bytes, 'index': index}, room=sid)
-        else:
-            print(f"[{sid}] TTS generation failed for chunk {index}")
-    except Exception as e:
-        print(f"TTS Streaming error (chunk {index}): {e}")
+# ---- Hume EVI Integration ----
+from huss import HumeEVIBridge
+
+sessions_hume = {}
+
+@app.route('/hume')
+def hume_ui():
+    return render_template('hume.html')
+
+@socketio.on('connect', namespace='/hume')
+def handle_hume_connect():
+    sid = request.sid
+    print(f"Hume Client connected: {sid}")
+    bridge = HumeEVIBridge(socketio, sid)
+    sessions_hume[sid] = bridge
+    
+    # Start the bridge in a background task (greenlet)
+    # Since huss.py is now sync (using websockets.sync), this works fine with eventlet.
+    socketio.start_background_task(bridge.start)
+
+@socketio.on('disconnect', namespace='/hume')
+def handle_hume_disconnect():
+    sid = request.sid
+    print(f"Hume Client disconnected: {sid}")
+    if sid in sessions_hume:
+        sessions_hume[sid].stop()
+        del sessions_hume[sid]
+
+@socketio.on('audio_chunk', namespace='/hume')
+def handle_hume_audio(data):
+    sid = request.sid
+    if sid in sessions_hume:
+        # Use simple sync method
+        sessions_hume[sid].send_audio(data)
 
 if __name__ == '__main__':
     print("--- Server Starting on http://0.0.0.0:6123 ---")

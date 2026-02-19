@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hume EVI Assistant</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+    <style>
+        :root {
+            --bg: #09090b;
+            --card: #18181b;
+            --primary: #8b5cf6; /* Violet for Hume */
+            --accent: #d946ef; /* Fuchsia */
+            --text: #f4f4f5;
+            --text-muted: #a1a1aa;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 600px;
+            text-align: center;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            height: 90vh;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 0.5rem 1rem;
+            border-radius: 9999px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            margin-bottom: 1rem;
+            background: rgba(139, 92, 246, 0.1);
+            color: var(--primary);
+            border: 1px solid rgba(139, 92, 246, 0.2);
+        }
+
+        .status-listening {
+            background: rgba(217, 70, 239, 0.1);
+            color: var(--accent);
+            border-color: rgba(217, 70, 239, 0.2);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(217, 70, 239, 0.4); }
+            70% { box-shadow: 0 0 0 10px rgba(217, 70, 239, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(217, 70, 239, 0); }
+        }
+
+        .chat-container {
+            background: var(--card);
+            border-radius: 1rem;
+            padding: 1.5rem;
+            flex-grow: 1;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .message-row {
+            display: flex;
+            width: 100%;
+            animation: slideIn 0.3s forwards;
+            opacity: 0;
+            transform: translateY(10px);
+        }
+
+        .message-row.user { justify-content: flex-end; }
+        .message-row.bot { justify-content: flex-start; }
+
+        .message-bubble {
+            padding: 0.75rem 1rem;
+            border-radius: 1rem;
+            max-width: 80%;
+            line-height: 1.5;
+            position: relative;
+        }
+
+        .user .message-bubble {
+            background: rgba(139, 92, 246, 0.2);
+            color: var(--text);
+            border-bottom-right-radius: 0.25rem;
+        }
+
+        .bot .message-bubble {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text);
+            border-bottom-left-radius: 0.25rem;
+        }
+        
+        .emotions-display {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 4px;
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        
+        .emotion-tag {
+            background: rgba(255,255,255,0.1);
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+
+        @keyframes slideIn {
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+        }
+
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            border: none;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #7c3aed;
+        }
+
+        .btn-danger {
+            background: #ef4444;
+            color: white;
+        }
+
+        .visualizer {
+            height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            margin-top: 1rem;
+        }
+
+        .bar {
+            width: 4px;
+            height: 10px;
+            background-color: var(--primary);
+            border-radius: 2px;
+            transition: height 0.05s ease;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="status" class="status-badge">Click Connect to Start</div>
+        
+        <div class="chat-container" id="chat">
+            <div class="message-row bot">
+                <div class="message-bubble">Hello! I'm your Empathic Voice Interface. Connect to start chatting.</div>
+            </div>
+        </div>
+
+        <div class="visualizer" id="visualizer"></div>
+
+        <div class="controls">
+            <button id="connectBtn" class="btn btn-primary" onclick="startSession()">Connect</button>
+            <button id="disconnectBtn" class="btn btn-danger" onclick="stopSession()" style="display: none;">Disconnect</button>
+        </div>
+        
+        <p style="margin-top: 1rem; color: var(--text-muted); font-size: 0.875rem;">
+            <a href="/" style="color: var(--primary);">Back to Standard Assistant</a>
+        </p>
+    </div>
+
+    <script>
+        // Connect to /hume namespace
+        const socket = io('/hume', { autoConnect: false });
+        
+        const statusEl = document.getElementById('status');
+        const connectBtn = document.getElementById('connectBtn');
+        const disconnectBtn = document.getElementById('disconnectBtn');
+        const chatContainer = document.getElementById('chat');
+        const visualizer = document.getElementById('visualizer');
+
+        // Visualizer setup
+        const BARS_COUNT = 30;
+        const bars = [];
+        for(let i=0; i<BARS_COUNT; i++) {
+            const bar = document.createElement('div');
+            bar.className = 'bar';
+            visualizer.appendChild(bar);
+            bars.push(bar);
+        }
+
+        let audioContext;
+        let processor;
+        let input;
+        let globalStream;
+        let audioQueue = [];
+        let isPlaying = false;
+
+        function startSession() {
+            statusEl.innerText = "Connecting...";
+            socket.connect();
+        }
+
+        function stopSession() {
+            if (socket.connected) socket.disconnect();
+            if (globalStream) {
+                globalStream.getTracks().forEach(track => track.stop());
+                globalStream = null;
+            }
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
+            }
+            resetUI();
+        }
+
+        function resetUI() {
+            statusEl.innerText = "Click Connect to Start";
+            statusEl.className = "status-badge";
+            connectBtn.style.display = 'block';
+            disconnectBtn.style.display = 'none';
+        }
+
+        async function initAudioRecording() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true,
+                        channelCount: 1
+                    }
+                });
+                globalStream = stream;
+
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                input = audioContext.createMediaStreamSource(stream);
+                
+                // Processor for streaming audio
+                processor = audioContext.createScriptProcessor(2048, 1, 1);
+                
+                processor.onaudioprocess = (e) => {
+                    const inputData = e.inputBuffer.getChannelData(0);
+                    
+                    // Convert float32 to int16 PCM
+                    const int16Data = new Int16Array(inputData.length);
+                    for (let i = 0; i < inputData.length; i++) {
+                        let s = Math.max(-1, Math.min(1, inputData[i]));
+                        int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                    }
+                    
+                    if (socket.connected) {
+                        socket.emit('audio_chunk', int16Data.buffer);
+                    }
+                    
+                    updateVisualizer(inputData);
+                };
+
+                input.connect(processor);
+                processor.connect(audioContext.destination); // Should we connect to detination? Yes for script processor living.
+                // But muting it to avoid self-loop?
+                // Actually scriptprocessor implementation needs connection to destination to fire events in some browsers.
+                // But if we connect input->processor->destination, we hear ourselves.
+                // So often we create a GainNode(0) connected to destination.
+                const mute = audioContext.createGain();
+                mute.gain.value = 0;
+                processor.connect(mute);
+                mute.connect(audioContext.destination);
+
+                statusEl.innerText = "Listening...";
+                statusEl.className = "status-badge status-listening";
+                connectBtn.style.display = 'none';
+                disconnectBtn.style.display = 'block';
+
+            } catch (err) {
+                console.error("Audio init error:", err);
+                statusEl.innerText = "Mic Error";
+                alert("Microphone access denied or error: " + err.message);
+            }
+        }
+
+        function updateVisualizer(data) {
+            const step = Math.floor(data.length / BARS_COUNT);
+            for(let i=0; i<BARS_COUNT; i++) {
+                let sum = 0;
+                for(let j=0; j<step; j++) {
+                    sum += Math.abs(data[i*step + j]);
+                }
+                const val = sum / step;
+                bars[i].style.height = Math.max(4, val * 100) + 'px';
+            }
+        }
+
+        // Socket Events
+        socket.on('connect', () => {
+            console.log("Connected to /hume");
+            initAudioRecording();
+        });
+
+        socket.on('disconnect', () => {
+            console.log("Disconnected");
+            resetUI();
+        });
+
+        socket.on('error', (data) => {
+            console.error("Server Error:", data);
+            addMessage('bot', `Error: ${data.message}`, true);
+        });
+
+        socket.on('transcription', (data) => {
+            addMessage('user', data.text, false, data.emotions);
+        });
+
+        socket.on('llm_response', (data) => {
+            // We might receive partial tokens or full text depending on bridge implementation.
+            // Bridge sends full 'assistant_message' content usually?
+            // Checking huss.py: it emits 'llm_response' on 'assistant_message'.
+            // Use this to show text.
+            addMessage('bot', data.text);
+        });
+
+        // Audio Playback Queue
+        socket.on('bot_audio', (data) => {
+            // data.audio is ArrayBuffer (decoded base64)
+            audioQueue.push(data.audio);
+            if (!isPlaying) playNextChunk();
+        });
+
+        async function playNextChunk() {
+            if (audioQueue.length === 0) {
+                isPlaying = false;
+                return;
+            }
+            isPlaying = true;
+            const audioData = audioQueue.shift();
+            
+            // Decode raw PCM? No, bot_audio from Hume is typically encoded audio (mp3/wav) 
+            // OR checks Config. Defaults? EVI usually sends MP3 or PCM.
+            // Bridge decodes msg.data (base64). 
+            // If Hume sends PCM, we need to play PCM.
+            // If Hume sends MP3/Opus, we can use Blob -> Audio.
+            // EVI defaults to MP3 usually if not specified? 
+            // Let's assume Blob for now given generic handling.
+            // Wait, standard EVI returns base64 audio. Format depends on config. 
+            // If defaulting, it might be MP3.
+            
+            try {
+                // Try Blob approach first (works for MP3/WAV/Opus)
+                const blob = new Blob([audioData], { type: 'audio/mp3' }); 
+                // We might need to adjust type if it fails
+                const url = URL.createObjectURL(blob);
+                const audio = new Audio(url);
+                audio.onended = () => {
+                    URL.revokeObjectURL(url);
+                    playNextChunk();
+                };
+                await audio.play();
+            } catch (e) {
+                console.error("Playback error:", e);
+                // If blob fails, it might be raw PCM. 
+                // But let's hope it's a container format.
+                playNextChunk();
+            }
+        }
+
+        function addMessage(role, text, isError=false, emotions=null) {
+            const row = document.createElement('div');
+            row.className = `message-row ${role}`;
+            
+            const content = document.createElement('div');
+            content.style.display = 'flex';
+            content.style.flexDirection = 'column';
+            content.style.alignItems = role === 'user' ? 'flex-end' : 'flex-start';
+            content.style.maxWidth = '80%';
+
+            const bubble = document.createElement('div');
+            bubble.className = 'message-bubble';
+            bubble.innerText = text;
+            if (isError) bubble.style.background = '#ef4444';
+            
+            content.appendChild(bubble);
+
+            if (emotions) {
+                const emoDiv = document.createElement('div');
+                emoDiv.className = 'emotions-display';
+                for (const [emo, score] of Object.entries(emotions)) {
+                    const tag = document.createElement('span');
+                    tag.className = 'emotion-tag';
+                    tag.innerText = `${emo} ${Math.round(score*100)}%`;
+                    emoDiv.appendChild(tag);
+                }
+                content.appendChild(emoDiv);
+            }
+
+            row.appendChild(content);
+            chatContainer.appendChild(row);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+    </script>
+</body>
+</html>

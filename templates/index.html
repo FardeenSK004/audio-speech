@@ -341,10 +341,33 @@
             color: var(--text);
             border-color: var(--text);
         }
+
+        .nav-ring-ui {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            color: var(--primary);
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            text-decoration: none;
+            font-size: 0.875rem;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            z-index: 1000;
+        }
+
+        .nav-ring-ui:hover {
+            background: rgba(59, 130, 246, 0.2);
+            border-color: var(--primary);
+        }
     </style>
 </head>
 
 <body>
+    <a href="/ring-ui" class="nav-ring-ui">Try Ring UI</a>
+    <a href="/hume" class="nav-ring-ui" style="top: 60px;">Hummmm</a>
     <div class="orb-wrapper" id="orb-container">
         <div class="orb" onclick="initAudio()">
             <div class="orb-glow"></div>
@@ -565,6 +588,10 @@
                 // Reset audio sequencing for new turn
                 nextAudioIndex = 0;
                 sequencedAudioBuffer = {};
+                skippedChunks = new Set();
+                totalExpectedChunks = -1;
+                if (waitTimeout) { clearTimeout(waitTimeout); waitTimeout = null; }
+                isPlaying = false;
             }
         });
 
@@ -599,13 +626,41 @@
         });
 
         let sequencedAudioBuffer = {};
+        let skippedChunks = new Set();
         let nextAudioIndex = 0;
         let isPlaying = false;
+        let totalExpectedChunks = -1;
+        let waitTimeout = null;
 
         async function playNextInQueue() {
+            // Clear any pending timeout
+            if (waitTimeout) { clearTimeout(waitTimeout); waitTimeout = null; }
+
+            // Skip over any chunks that were marked as failed
+            while (skippedChunks.has(nextAudioIndex)) {
+                logEvent('Audio', `Skipping failed chunk ${nextAudioIndex}`);
+                skippedChunks.delete(nextAudioIndex);
+                nextAudioIndex++;
+            }
+
+            // If we've played all expected chunks, stop
+            if (totalExpectedChunks >= 0 && nextAudioIndex >= totalExpectedChunks) {
+                isPlaying = false;
+                logEvent('Audio', 'All chunks played');
+                return;
+            }
+
             // Check if the next expected index is in our buffer
             if (!sequencedAudioBuffer[nextAudioIndex]) {
                 isPlaying = false;
+                // Set a timeout: if chunk doesn't arrive in 5s, skip it
+                if (totalExpectedChunks >= 0 && nextAudioIndex < totalExpectedChunks) {
+                    waitTimeout = setTimeout(() => {
+                        logEvent('Audio', `Timeout waiting for chunk ${nextAudioIndex}, skipping`);
+                        nextAudioIndex++;
+                        playNextInQueue();
+                    }, 5000);
+                }
                 return;
             }
 
@@ -616,13 +671,19 @@
             const currentIdx = nextAudioIndex;
             nextAudioIndex++;
 
-            const blob = new Blob([audioData], { type: 'audio/mpeg' });
+            const blob = new Blob([audioData], { type: 'audio/ogg; codecs=opus' });
             const url = URL.createObjectURL(blob);
             const audio = new Audio(url);
 
             audio.onended = () => {
                 URL.revokeObjectURL(url);
-                logEvent('Audio', `Finished playing chunk ${currentIdx}`);
+                logEvent('Audio', `Finished chunk ${currentIdx}`);
+                playNextInQueue();
+            };
+
+            audio.onerror = () => {
+                URL.revokeObjectURL(url);
+                logEvent('Error', `Decode error on chunk ${currentIdx}, skipping`);
                 playNextInQueue();
             };
 
@@ -636,10 +697,24 @@
         }
 
         socket.on('bot_audio', async (data) => {
-            // data is {audio: bytes, index: number}
             logEvent('Audio', `Received chunk ${data.index}`);
             sequencedAudioBuffer[data.index] = data.audio;
+            if (!isPlaying) {
+                playNextInQueue();
+            }
+        });
 
+        socket.on('bot_audio_skip', (data) => {
+            logEvent('Audio', `Server skipped chunk ${data.index}`);
+            skippedChunks.add(data.index);
+            if (!isPlaying) {
+                playNextInQueue();
+            }
+        });
+
+        socket.on('tts_complete', (data) => {
+            totalExpectedChunks = data.total_chunks;
+            logEvent('Audio', `TTS complete: ${data.total_chunks} total chunks`);
             if (!isPlaying) {
                 playNextInQueue();
             }

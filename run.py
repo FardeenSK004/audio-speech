@@ -845,16 +845,15 @@ async def dashboard_task():
         heatmap.set_data(intensity_data)
         
         # Robust metric display
-        in_details = usage.get("input_details", {})
-        out_details = usage.get("output_details", {})
-        out_details = usage.get("output_token_details", {})
+        in_details = state.usage.get("input_details", {})
+        out_details = state.usage.get("output_details", {})
         
         usage_info = (
             f"Input Text Tokens: {in_details.get('text_tokens', 0)}\n"
             f"Input Audio Tokens: {in_details.get('audio_tokens', 0)}\n"
             f"Output Text Tokens: {out_details.get('text_tokens', 0)}\n"
             f"Output Audio Tokens: {out_details.get('audio_tokens', 0)}\n\n"
-            f"Total Tokens: {usage.get('total_tokens', 0)}\n"
+            f"Total Tokens: {state.usage.get('total_tokens', 0)}\n"
             f"ESTIMATED COST: ${state.cost:.4f}"
         )
         metrics_text.set_text(usage_info)

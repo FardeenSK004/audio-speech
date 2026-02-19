@@ -13,11 +13,16 @@ init(autoreset=True)
 class TTS:
     def __init__(self):
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        self.model = "tts-1"
+        self.model = "gpt-4o-mini-tts"
         self.is_playing = False
+        self.instructions = (
+            "Speak in a warm, empathetic, and natural conversational tone. "
+            "Sound like a caring friend — gentle, emotionally present, and expressive. "
+            "Vary your pace and intonation naturally. Show genuine feeling in your voice."
+        )
 
     def get_audio_bytes(self, text):
-        """Synthesizes text and returns the raw audio bytes (MP3)."""
+        """Synthesizes text and returns the raw audio bytes (opus)."""
         if not text:
             return None
             
@@ -27,6 +32,9 @@ class TTS:
                 model=self.model,
                 voice="nova",
                 input=text,
+                instructions=self.instructions,
+                response_format="opus",
+                speed=1.05,
             )
             return response.content
         except Exception as e:

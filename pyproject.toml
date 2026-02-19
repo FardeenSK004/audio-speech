@@ -17,6 +17,7 @@ dependencies = [
     "soundfile>=0.13.1",
     "tiktoken>=0.12.0",
     "webrtcvad-wheels>=2.0.14",
-    "websockets==11.0.3",
+    "websockets>=13.0",
     "matplotlib>=3.8.0",
+    "hume==0.13.8",
 ]
